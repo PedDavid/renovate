@@ -819,7 +819,7 @@ export class DockerDatasource extends Datasource {
           if (
             !retryGhcrPagination ||
             !(err instanceof HttpError) ||
-            err.statusCode !== 429
+            err.response?.statusCode !== 429
           ) {
             throw err;
           }
