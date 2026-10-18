@@ -1,0 +1,43 @@
+name: GHCR packages API test image
+
+on:
+  push:
+    branches:
+      - fork/ghcr-packages-api
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.repository == 'PedDavid/renovate'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+        with:
+          install: false
+          runtime: node@24
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prepare:generate
+      - run: pnpm build
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Login to fork GHCR only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build and publish test image
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          tag="ghcr.io/peddavid/renovate:ghcr-packages-api-${SHA:0:12}-full"
+          docker buildx build --platform linux/amd64 --file tools/docker/Dockerfile \
+            --build-arg BASE_IMAGE_TYPE=full \
+            --build-arg RENOVATE_VERSION="ghcr-packages-api-${SHA:0:12}" \
+            --tag "$tag" --push .
+          docker buildx imagetools inspect "$tag"

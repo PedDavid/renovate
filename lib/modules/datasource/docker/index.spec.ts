@@ -172,10 +172,115 @@ describe('modules/datasource/docker/index', () => {
       username: 'some-username',
       password: 'some-password',
     });
+    vi.stubEnv('RENOVATE_X_GHCR_IMMICH_PACKAGES', undefined);
     vi.stubEnv('RENOVATE_X_DOCKER_HUB_TAGS_DISABLE', undefined);
     vi.stubEnv('RENOVATE_X_DOCKER_HUB_DISABLE_LABEL_LOOKUP', undefined);
     vi.stubEnv('RENOVATE_X_DOCKER_PAGINATION_ALLOW_CROSS_ORIGIN', undefined);
     vi.stubEnv('RENOVATE_X_NUGET_PAGINATION_ALLOW_CROSS_ORIGIN', undefined);
+  });
+
+  describe('experimental Immich GHCR packages lookup', () => {
+    const ds = new DockerDatasource();
+    const config = {
+      packageName: 'ghcr.io/immich-app/immich-server',
+      registryUrl: 'https://ghcr.io',
+      currentValue: 'v3.1.0',
+    };
+
+    beforeEach(() => {
+      vi.spyOn(ds, 'getLabels').mockResolvedValue({});
+    });
+
+    it('uses API tags while leaving digest lookup on the registry', async () => {
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_PACKAGES', 'true');
+      const registry = vi.spyOn(ds, 'getTags');
+      httpMock
+        .scope('https://api.github.com', {
+          reqheaders: { authorization: 'token some-password' },
+        })
+        .get(
+          '/orgs/immich-app/packages/container/immich-server/versions?per_page=100&page=1',
+        )
+        .reply(200, [
+          { metadata: { container: { tags: ['v3.2.0', 'v3.1.0'] } } },
+        ])
+        .get('/repos/immich-app/immich/releases/latest')
+        .reply(200, { tag_name: 'v3.2.0' });
+
+      const result = await ds.getReleases(config);
+      httpMock
+        .scope('https://ghcr.io/v2')
+        .get('/')
+        .reply(200, {})
+        .head('/immich-app/immich-server/manifests/v3.2.0')
+        .reply(200, undefined, {
+          'docker-content-digest': `sha256:${'a'.repeat(64)}`,
+        });
+      const digest = await ds.getDigest(
+        {
+          packageName: config.packageName,
+          registryUrl: result!.registryUrl,
+          lookupName: result!.lookupName,
+        },
+        'v3.2.0',
+      );
+
+      expect(result?.releases).toEqual([
+        { version: 'v3.2.0' },
+        { version: 'v3.1.0' },
+      ]);
+      expect(digest).toBe(`sha256:${'a'.repeat(64)}`);
+      expect(registry).not.toHaveBeenCalled();
+    });
+
+    it('falls back to registry tags on an API failure', async () => {
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_PACKAGES', 'true');
+      const registry = vi.spyOn(ds, 'getTags').mockResolvedValue(['v3.2.0']);
+      httpMock
+        .scope('https://api.github.com')
+        .get(
+          '/orgs/immich-app/packages/container/immich-server/versions?per_page=100&page=1',
+        )
+        .reply(403, {});
+
+      const result = await ds.getReleases(config);
+
+      expect(result?.releases).toEqual([{ version: 'v3.2.0' }]);
+      expect(registry).toHaveBeenCalledWith(
+        'https://ghcr.io',
+        'immich-app/immich-server',
+      );
+    });
+
+    it('falls back to registry tags when there is no current value', async () => {
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_PACKAGES', 'true');
+      const registry = vi.spyOn(ds, 'getTags').mockResolvedValue(['v3.2.0']);
+
+      const result = await ds.getReleases({
+        packageName: config.packageName,
+        registryUrl: config.registryUrl,
+      });
+
+      expect(result?.releases).toEqual([{ version: 'v3.2.0' }]);
+      expect(registry).toHaveBeenCalledWith(
+        'https://ghcr.io',
+        'immich-app/immich-server',
+      );
+    });
+
+    it('does not use the API without opt-in or for another image', async () => {
+      const registry = vi.spyOn(ds, 'getTags').mockResolvedValue(['v3.2.0']);
+      await ds.getReleases(config);
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_PACKAGES', 'true');
+
+      const other = await ds.getReleases({
+        ...config,
+        packageName: 'ghcr.io/other/image',
+      });
+
+      expect(other?.releases).toEqual([{ version: 'v3.2.0' }]);
+      expect(registry).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('getDigest', () => {
