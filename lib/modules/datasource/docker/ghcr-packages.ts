@@ -29,8 +29,29 @@ export async function getImmichPackageTags(
     hostType: 'docker',
     url: 'https://ghcr.io/v2/',
   }).password;
+  const tags = new Set<string>();
+  let pagesFetched = 0;
+  let latestReleaseChecked = false;
+  let latestReleaseFound = false;
+  function logDecision(outcome: string): void {
+    // Emit one event per lookup, not per page. Never log URLs, raw errors, or
+    // response headers: the request's authorization header contains the PAT.
+    logger.info(
+      {
+        dockerRepository: repository,
+        source: outcome === 'used_api' ? 'packages_api' : 'registry_fallback',
+        outcome,
+        pagesFetched,
+        tagsFound: tags.size,
+        currentTagFound: tags.has(currentValue),
+        latestReleaseChecked,
+        latestReleaseFound,
+      },
+      'Immich GHCR Packages lookup decision',
+    );
+  }
   if (!credential || !currentValue) {
-    logger.debug('GHCR packages POC needs a GHCR password and current tag');
+    logDecision('missing_prerequisite');
     return null;
   }
 
@@ -39,7 +60,6 @@ export async function getImmichPackageTags(
     accept: 'application/vnd.github+json',
     'x-github-api-version': '2022-11-28',
   };
-  const tags = new Set<string>();
   try {
     // This is an observed order, NOT a documented API contract. Bound the
     // experiment; if we cannot establish a stopping point, use registry v2.
@@ -50,6 +70,7 @@ export async function getImmichPackageTags(
         { headers, noAuth: true },
         packageVersions,
       );
+      pagesFetched += 1;
       const versions = response.body;
       for (const version of versions) {
         for (const tag of version.metadata.container.tags) {
@@ -64,22 +85,25 @@ export async function getImmichPackageTags(
           { headers, noAuth: true },
           latestRelease,
         );
-        const { tag_name: latest } = release.body;
-        if (tags.has(latest)) {
-          logger.debug(`GHCR packages POC stopped at page ${page}`);
+        latestReleaseChecked = true;
+        latestReleaseFound = tags.has(release.body.tag_name);
+        if (latestReleaseFound) {
+          logDecision('used_api');
           return [...tags];
         }
-        break;
+        logDecision('missing_latest');
+        return null;
       }
       if (versions.length < 100) {
-        break;
+        logDecision('missing_current');
+        return null;
       }
     }
   } catch {
     // Avoid logging HTTP errors: they may contain request headers with the PAT.
-    logger.debug('GHCR packages POC failed; using registry tags');
+    logDecision('api_error');
     return null;
   }
-  logger.debug('GHCR packages POC cannot validate tags; using registry tags');
+  logDecision('page_limit');
   return null;
 }

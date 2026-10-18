@@ -1,5 +1,6 @@
 import { hostRules } from '~test/host-rules.ts';
 import * as httpMock from '~test/http-mock.ts';
+import { logger } from '~test/util.ts';
 import { getImmichPackageTags } from './ghcr-packages.ts';
 
 const api = 'https://api.github.com';
@@ -49,6 +50,19 @@ describe('modules/datasource/docker/ghcr-packages', () => {
     expect(tags).toContain('v3.2.0');
     expect(tags).toContain('release');
     expect(tags).toContain('v3.1.0');
+    expect(logger.logger.info).toHaveBeenCalledWith(
+      {
+        dockerRepository: 'immich-app/immich-server',
+        source: 'packages_api',
+        outcome: 'used_api',
+        pagesFetched: 2,
+        tagsFound: 4,
+        currentTagFound: true,
+        latestReleaseChecked: true,
+        latestReleaseFound: true,
+      },
+      'Immich GHCR Packages lookup decision',
+    );
   });
 
   it('falls back when the latest release is absent', async () => {
@@ -58,6 +72,16 @@ describe('modules/datasource/docker/ghcr-packages', () => {
     await expect(
       getImmichPackageTags('immich-app/immich-server', 'v3.1.0'),
     ).resolves.toBeNull();
+    expect(logger.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'registry_fallback',
+        outcome: 'missing_latest',
+        pagesFetched: 1,
+        latestReleaseChecked: true,
+        latestReleaseFound: false,
+      }),
+      'Immich GHCR Packages lookup decision',
+    );
   });
 
   it('falls back if the current tag is not found', async () => {
@@ -66,6 +90,16 @@ describe('modules/datasource/docker/ghcr-packages', () => {
     await expect(
       getImmichPackageTags('immich-app/immich-server', 'v3.1.0'),
     ).resolves.toBeNull();
+    expect(logger.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'registry_fallback',
+        outcome: 'missing_current',
+        pagesFetched: 1,
+        currentTagFound: false,
+        latestReleaseChecked: false,
+      }),
+      'Immich GHCR Packages lookup decision',
+    );
   });
 
   it('falls back on API errors', async () => {
@@ -77,6 +111,17 @@ describe('modules/datasource/docker/ghcr-packages', () => {
     await expect(
       getImmichPackageTags('immich-app/immich-server', 'v3.1.0'),
     ).resolves.toBeNull();
+    expect(logger.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'registry_fallback',
+        outcome: 'api_error',
+        pagesFetched: 0,
+      }),
+      'Immich GHCR Packages lookup decision',
+    );
+    expect(JSON.stringify(logger.logger.info.mock.calls)).not.toContain(
+      'test-pat',
+    );
   });
 
   it('bounds pagination at ten pages before falling back', async () => {
@@ -90,6 +135,14 @@ describe('modules/datasource/docker/ghcr-packages', () => {
     await expect(
       getImmichPackageTags('immich-app/immich-server', 'v3.1.0'),
     ).resolves.toBeNull();
+    expect(logger.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'registry_fallback',
+        outcome: 'page_limit',
+        pagesFetched: 10,
+      }),
+      'Immich GHCR Packages lookup decision',
+    );
   });
 
   it('maps machine-learning package versions into their tags', async () => {
@@ -115,5 +168,13 @@ describe('modules/datasource/docker/ghcr-packages', () => {
     await expect(
       getImmichPackageTags('immich-app/immich-server', ''),
     ).resolves.toBeNull();
+    expect(logger.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'registry_fallback',
+        outcome: 'missing_prerequisite',
+        pagesFetched: 0,
+      }),
+      'Immich GHCR Packages lookup decision',
+    );
   });
 });
