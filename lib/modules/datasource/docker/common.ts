@@ -1,3 +1,4 @@
+import { setTimeout } from 'node:timers/promises';
 import { isNonEmptyString, isString, isUndefined } from '@sindresorhus/is';
 import {
   HOST_BLOCKED,
@@ -65,16 +66,43 @@ export async function getAuthHeaders(
       noAuth: true,
       cacheProvider: memCacheProvider,
     };
-    // Written as an if/else rather than a ternary on purpose: v8 gives the
-    // branch that follows an `await` inside a ternary a negative hit count,
-    // which the coverage reporters then read as uncovered.
     let apiCheckResponse: HttpResponse<unknown>;
-    if (apiCheckUrl.endsWith('/v2/')) {
-      apiCheckResponse = await http.get(apiCheckUrl, options);
-    } else {
-      // use json request, as this will be cached for tags, so it returns json
-      // TODO: add cache test
-      apiCheckResponse = await http.getJsonUnchecked(apiCheckUrl, options);
+    let retries = 0;
+    for (let attempt = 0; ; attempt += 1) {
+      // Written as an if/else rather than a ternary on purpose: v8 gives the
+      // branch that follows an `await` inside a ternary a negative hit count.
+      if (apiCheckUrl.endsWith('/v2/')) {
+        apiCheckResponse = await http.get(apiCheckUrl, options);
+      } else {
+        // use json request, as this will be cached for tags, so it returns json
+        // TODO: add cache test
+        apiCheckResponse = await http.getJsonUnchecked(apiCheckUrl, options);
+      }
+      if (apiCheckResponse.statusCode !== 429 || attempt === 2) {
+        break;
+      }
+      // throwHttpErrors: false means got cannot retry a 429 response here.
+      retries += 1;
+      await setTimeout(250 * 2 ** attempt);
+    }
+
+    if (retries > 0) {
+      let outcome = 'other_response';
+      if (
+        apiCheckResponse.statusCode === 200 ||
+        (apiCheckResponse.statusCode === 401 &&
+          isNonEmptyString(apiCheckResponse.headers['www-authenticate']))
+      ) {
+        outcome = 'recovered';
+      } else if (apiCheckResponse.statusCode === 429) {
+        outcome = 'exhausted';
+      }
+      // One event per affected probe, regardless of how many attempts it took.
+      // Never log the response or headers: they may contain credentials.
+      logger.info(
+        { registryHost, dockerRepository, retries, outcome },
+        'Docker registry auth probe rate limit',
+      );
     }
 
     if (apiCheckResponse.statusCode === 200) {
