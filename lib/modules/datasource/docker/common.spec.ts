@@ -127,6 +127,68 @@ describe('modules/datasource/docker/common', () => {
       });
     });
 
+    it('retries a rate-limited tags auth probe before negotiating bearer auth', async () => {
+      httpMock
+        .scope('https://ghcr.io')
+        .get('/v2/org/image/tags/list', undefined, {
+          badheaders: ['authorization'],
+        })
+        .reply(429, { errors: [{ code: 'TOOMANYREQUESTS' }] })
+        .get('/v2/org/image/tags/list', undefined, {
+          badheaders: ['authorization'],
+        })
+        .reply(401, '', {
+          'www-authenticate':
+            'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:org/image:pull"',
+        })
+        .get('/token?scope=repository%3Aorg%2Fimage%3Apull&service=ghcr.io')
+        .reply(200, { token: 'abc' });
+
+      const headers = await getAuthHeaders(
+        http,
+        'https://ghcr.io',
+        'org/image',
+        'https://ghcr.io/v2/org/image/tags/list',
+      );
+
+      expect(headers).toEqual({ authorization: 'Bearer abc' });
+    });
+
+    it('retries a rate-limited base auth probe without sending credentials', async () => {
+      httpMock
+        .scope('https://ghcr.io')
+        .get('/v2/', undefined, { badheaders: ['authorization'] })
+        .reply(429, '')
+        .get('/v2/', undefined, { badheaders: ['authorization'] })
+        .reply(200, '');
+
+      const headers = await getAuthHeaders(
+        http,
+        'https://ghcr.io',
+        'org/image',
+      );
+
+      expect(headers).toEqual({});
+    });
+
+    it('stops after two retries when the auth probe remains rate limited', async () => {
+      httpMock
+        .scope('https://ghcr.io')
+        .get('/v2/', undefined, { badheaders: ['authorization'] })
+        .times(3)
+        .reply(429, '');
+
+      const headers = await getAuthHeaders(
+        http,
+        'https://ghcr.io',
+        'org/image',
+      );
+
+      // Preserve the existing invalid-response behavior on exhaustion:
+      // do not abort the entire repository run for a persistent 429.
+      expect(headers).toBeUndefined();
+    });
+
     it('throw page not found exception', async () => {
       httpMock
         .scope('https://my.local.registry')
