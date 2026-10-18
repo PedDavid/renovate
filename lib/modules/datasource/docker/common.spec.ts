@@ -1,6 +1,6 @@
 import { hostRules } from '~test/host-rules.ts';
 import * as httpMock from '~test/http-mock.ts';
-import { partial } from '~test/util.ts';
+import { logger, partial } from '~test/util.ts';
 import { PAGE_NOT_FOUND_ERROR } from '../../../constants/error-messages.ts';
 import { Http } from '../../../util/http/index.ts';
 import {
@@ -152,6 +152,15 @@ describe('modules/datasource/docker/common', () => {
       );
 
       expect(headers).toEqual({ authorization: 'Bearer abc' });
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        {
+          registryHost: 'https://ghcr.io',
+          dockerRepository: 'org/image',
+          retries: 1,
+          outcome: 'recovered',
+        },
+        'Docker registry auth probe rate limit',
+      );
     });
 
     it('retries a rate-limited base auth probe without sending credentials', async () => {
@@ -169,6 +178,15 @@ describe('modules/datasource/docker/common', () => {
       );
 
       expect(headers).toEqual({});
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        {
+          registryHost: 'https://ghcr.io',
+          dockerRepository: 'org/image',
+          retries: 1,
+          outcome: 'recovered',
+        },
+        'Docker registry auth probe rate limit',
+      );
     });
 
     it('stops after two retries when the auth probe remains rate limited', async () => {
@@ -187,6 +205,41 @@ describe('modules/datasource/docker/common', () => {
       // Preserve the existing invalid-response behavior on exhaustion:
       // do not abort the entire repository run for a persistent 429.
       expect(headers).toBeUndefined();
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        {
+          registryHost: 'https://ghcr.io',
+          dockerRepository: 'org/image',
+          retries: 2,
+          outcome: 'exhausted',
+        },
+        'Docker registry auth probe rate limit',
+      );
+    });
+
+    it('logs a non-429 auth failure after retry without calling it recovered', async () => {
+      httpMock
+        .scope('https://ghcr.io')
+        .get('/v2/')
+        .reply(429, '')
+        .get('/v2/')
+        .reply(403, '');
+
+      const headers = await getAuthHeaders(
+        http,
+        'https://ghcr.io',
+        'org/image',
+      );
+
+      expect(headers).toBeUndefined();
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        {
+          registryHost: 'https://ghcr.io',
+          dockerRepository: 'org/image',
+          retries: 1,
+          outcome: 'other_response',
+        },
+        'Docker registry auth probe rate limit',
+      );
     });
 
     it('throw page not found exception', async () => {
