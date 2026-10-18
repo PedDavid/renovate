@@ -48,6 +48,7 @@ import {
 } from './common.ts';
 import { DockerHubCache } from './dockerhub-cache.ts';
 import { ecrPublicRegex, ecrRegex, isECRMaxResultsError } from './ecr.ts';
+import { getImmichPackageTags } from './ghcr-packages.ts';
 import type {
   DistributionManifest,
   Manifest,
@@ -1238,6 +1239,7 @@ export class DockerDatasource extends Datasource {
   private async _getReleases({
     packageName,
     registryUrl,
+    currentValue,
   }: GetReleasesConfig): Promise<ReleaseResult | null> {
     const { registryHost, dockerRepository } = getRegistryRepository(
       packageName,
@@ -1261,11 +1263,31 @@ export class DockerDatasource extends Datasource {
         'dockerhub-error' as const,
       ).catch(getTags);
 
-    const tagsResult =
+    let tagsResult: TagsResultType;
+    if (
+      getEnv().RENOVATE_X_GHCR_IMMICH_PACKAGES === 'true' &&
+      registryHost === 'https://ghcr.io' &&
+      (dockerRepository === 'immich-app/immich-server' ||
+        dockerRepository === 'immich-app/immich-machine-learning')
+    ) {
+      const packageTags = await getImmichPackageTags(
+        dockerRepository,
+        currentValue ?? '',
+      );
+      tagsResult = packageTags
+        ? Result.wrapNullable(
+            Promise.resolve(packageTags),
+            'tags-error' as const,
+          ).transform((tags) => tags.map((version) => ({ version })))
+        : getTags();
+    } else if (
       registryHost === DOCKER_HUB &&
       !getEnv().RENOVATE_X_DOCKER_HUB_TAGS_DISABLE
-        ? getDockerHubTags()
-        : getTags();
+    ) {
+      tagsResult = getDockerHubTags();
+    } else {
+      tagsResult = getTags();
+    }
 
     const { val: releases, err } = await tagsResult.unwrap();
     if (err instanceof Error) {
