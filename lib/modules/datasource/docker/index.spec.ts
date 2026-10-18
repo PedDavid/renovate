@@ -252,6 +252,22 @@ describe('modules/datasource/docker/index', () => {
       );
     });
 
+    it('falls back to registry tags when there is no current value', async () => {
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_PACKAGES', 'true');
+      const registry = vi.spyOn(ds, 'getTags').mockResolvedValue(['v3.2.0']);
+
+      const result = await ds.getReleases({
+        packageName: config.packageName,
+        registryUrl: config.registryUrl,
+      });
+
+      expect(result?.releases).toEqual([{ version: 'v3.2.0' }]);
+      expect(registry).toHaveBeenCalledWith(
+        'https://ghcr.io',
+        'immich-app/immich-server',
+      );
+    });
+
     it('does not use the API without opt-in or for another image', async () => {
       const registry = vi.spyOn(ds, 'getTags').mockResolvedValue(['v3.2.0']);
       await ds.getReleases(config);
