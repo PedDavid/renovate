@@ -3754,6 +3754,94 @@ describe('modules/datasource/docker/index', () => {
       await dirResult.cleanup();
     });
 
+    it('retries an exhausted GHCR 429 on the same Immich pagination cursor', async () => {
+      const scope = httpMock.scope('https://ghcr.io/v2');
+      const tagsUrl = '/immich-app/immich-machine-learning/tags/list?n=10000';
+      const nextUrl = `${tagsUrl}&last=v3.3.3`;
+      scope
+        .get(tagsUrl)
+        .reply(200, '', {}) // Auth probe
+        .get(tagsUrl)
+        .reply(
+          200,
+          { tags: ['v3.3.3'] },
+          {
+            link: `<https://ghcr.io/v2${nextUrl}>; rel="next"`,
+          },
+        )
+        .get(nextUrl)
+        .reply(429, { errors: [{ code: 'TOOMANYREQUESTS' }] })
+        .get(nextUrl)
+        .reply(200, { tags: ['v3.3.4'] });
+
+      const ds = new DockerDatasource();
+      await expect(
+        ds.getTags('https://ghcr.io', 'immich-app/immich-machine-learning'),
+      ).resolves.toEqual(['v3.3.3', 'v3.3.4']);
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        {
+          registryHost: 'https://ghcr.io',
+          dockerRepository: 'immich-app/immich-machine-learning',
+          retries: 1,
+          outcome: 'recovered',
+        },
+        'Docker registry tags pagination rate limit',
+      );
+    });
+
+    it('reports an exhausted 429 without restarting the Immich tag walk', async () => {
+      const scope = httpMock.scope('https://ghcr.io/v2');
+      const tagsUrl = '/immich-app/immich-server/tags/list?n=10000';
+      const nextUrl = `${tagsUrl}&last=v3.3.3`;
+      scope
+        .get(tagsUrl)
+        .reply(200, '', {}) // Auth probe
+        .get(tagsUrl)
+        .reply(
+          200,
+          { tags: ['v3.3.3'] },
+          {
+            link: `<https://ghcr.io/v2${nextUrl}>; rel="next"`,
+          },
+        )
+        .get(nextUrl)
+        .times(3)
+        .reply(429, { errors: [{ code: 'TOOMANYREQUESTS' }] });
+
+      const ds = new DockerDatasource();
+      await expect(
+        ds.getTags('https://ghcr.io', 'immich-app/immich-server'),
+      ).rejects.toMatchObject({ statusCode: 429 });
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        {
+          registryHost: 'https://ghcr.io',
+          dockerRepository: 'immich-app/immich-server',
+          retries: 2,
+          outcome: 'exhausted',
+        },
+        'Docker registry tags pagination rate limit',
+      );
+    });
+
+    it('does not retry 429 pagination for other GHCR packages', async () => {
+      const scope = httpMock.scope('https://ghcr.io/v2');
+      const tagsUrl = '/example/image/tags/list?n=10000';
+      scope
+        .get(tagsUrl)
+        .reply(200, '', {}) // Auth probe
+        .get(tagsUrl)
+        .reply(429, { errors: [{ code: 'TOOMANYREQUESTS' }] });
+
+      const ds = new DockerDatasource();
+      await expect(
+        ds.getTags('https://ghcr.io', 'example/image'),
+      ).rejects.toMatchObject({ statusCode: 429 });
+      expect(logger.logger.info).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Docker registry tags pagination rate limit',
+      );
+    });
+
     it('caches tags for Docker Hub', async () => {
       httpMock
         .scope(baseUrl)

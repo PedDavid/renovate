@@ -1,3 +1,4 @@
+import { setTimeout } from 'node:timers/promises';
 import { isNonEmptyString } from '@sindresorhus/is';
 import { GlobalConfig } from '../../../config/global.ts';
 import { PAGE_NOT_FOUND_ERROR } from '../../../constants/error-messages.ts';
@@ -777,27 +778,60 @@ export class DockerDatasource extends Datasource {
     logger.trace({ registryHost, dockerRepository, pages }, 'docker.getTags');
     const allowCrossOrigin = isCrossOriginPaginationAllowed(dockerDatasourceId);
     let foundMaxResultsError = false;
+    const retryGhcrPagination =
+      registryHost === 'https://ghcr.io' &&
+      (dockerRepository === 'immich-app/immich-server' ||
+        dockerRepository === 'immich-app/immich-machine-learning');
     do {
-      let res: HttpResponse<RegistryTagsList>;
-      try {
-        res = await this.http.getJson(
-          url,
-          { headers, noAuth: true },
-          RegistryTagsList,
-        );
-      } catch (err) {
-        if (
-          !foundMaxResultsError &&
-          err instanceof HttpError &&
-          isECRMaxResultsError(err)
-        ) {
-          const maxResults = 1000;
-          url = `${registryHost}/${dockerRepository}/tags/list?n=${maxResults}`;
-          url = ensurePathPrefix(url, '/v2');
-          foundMaxResultsError = true;
-          continue;
+      let res: HttpResponse<RegistryTagsList> | undefined;
+      // Retry the same cursor after got's own retries are exhausted. Never
+      // restart the full walk: GHCR has hundreds of pages for these images.
+      for (let retries = 0; ; retries += 1) {
+        try {
+          res = await this.http.getJson(
+            url,
+            { headers, noAuth: true },
+            RegistryTagsList,
+          );
+          if (retries > 0) {
+            logger.info(
+              { registryHost, dockerRepository, retries, outcome: 'recovered' },
+              'Docker registry tags pagination rate limit',
+            );
+          }
+          break;
+        } catch (err) {
+          if (
+            !foundMaxResultsError &&
+            err instanceof HttpError &&
+            isECRMaxResultsError(err)
+          ) {
+            const maxResults = 1000;
+            url = `${registryHost}/${dockerRepository}/tags/list?n=${maxResults}`;
+            url = ensurePathPrefix(url, '/v2');
+            foundMaxResultsError = true;
+            break;
+          }
+          if (
+            !retryGhcrPagination ||
+            !(err instanceof HttpError) ||
+            err.statusCode !== 429
+          ) {
+            throw err;
+          }
+          if (retries === 2) {
+            logger.info(
+              { registryHost, dockerRepository, retries, outcome: 'exhausted' },
+              'Docker registry tags pagination rate limit',
+            );
+            throw err;
+          }
+          await setTimeout(1000 * 2 ** retries);
         }
-        throw err;
+      }
+      if (!res) {
+        // ECR rejected the requested page size; try this page with n=1000.
+        continue;
       }
       tags = tags.concat(res.body.tags);
       const linkHeader = parseLinkHeader(res.headers.link);
