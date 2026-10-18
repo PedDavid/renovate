@@ -35,8 +35,9 @@ jobs:
         env:
           SHA: ${{ github.sha }}
         run: |
-          tag="ghcr.io/peddavid/renovate:ghcr-auth-retry-${SHA:0:12}"
+          tag="ghcr.io/peddavid/renovate:ghcr-auth-retry-${SHA:0:12}-full"
           docker buildx build --platform linux/amd64 --file tools/docker/Dockerfile \
+            --build-arg BASE_IMAGE_TYPE=full \
             --build-arg RENOVATE_VERSION="ghcr-auth-retry-${SHA:0:12}" \
             --tag "$tag" --push .
           docker buildx imagetools inspect "$tag"
