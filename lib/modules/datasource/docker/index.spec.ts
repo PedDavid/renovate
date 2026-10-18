@@ -208,11 +208,28 @@ describe('modules/datasource/docker/index', () => {
         .reply(200, { tag_name: 'v3.2.0' });
 
       const result = await ds.getReleases(config);
+      httpMock
+        .scope('https://ghcr.io/v2')
+        .get('/')
+        .reply(200, {})
+        .head('/immich-app/immich-server/manifests/v3.2.0')
+        .reply(200, undefined, {
+          'docker-content-digest': `sha256:${'a'.repeat(64)}`,
+        });
+      const digest = await ds.getDigest(
+        {
+          packageName: config.packageName,
+          registryUrl: result!.registryUrl,
+          lookupName: result!.lookupName,
+        },
+        'v3.2.0',
+      );
 
       expect(result?.releases).toEqual([
         { version: 'v3.2.0' },
         { version: 'v3.1.0' },
       ]);
+      expect(digest).toBe(`sha256:${'a'.repeat(64)}`);
       expect(registry).not.toHaveBeenCalled();
     });
 
