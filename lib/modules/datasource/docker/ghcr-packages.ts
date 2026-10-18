@@ -45,8 +45,12 @@ export async function getImmichPackageTags(
     // experiment; if we cannot establish a stopping point, use registry v2.
     for (let page = 1; page <= 10; page += 1) {
       const url = `${api}/orgs/immich-app/packages/container/${repository.split('/')[1]}/versions?per_page=100&page=${page}`;
-      const response = await http.getJson(url, { headers, noAuth: true });
-      const versions = packageVersions.parse(response.body);
+      const response = await http.getJson(
+        url,
+        { headers, noAuth: true },
+        packageVersions,
+      );
+      const versions = response.body;
       for (const version of versions) {
         for (const tag of version.metadata.container.tags) {
           tags.add(tag);
@@ -58,8 +62,9 @@ export async function getImmichPackageTags(
         const release = await http.getJson(
           `${api}/repos/immich-app/immich/releases/latest`,
           { headers, noAuth: true },
+          latestRelease,
         );
-        const { tag_name: latest } = latestRelease.parse(release.body);
+        const { tag_name: latest } = release.body;
         if (tags.has(latest)) {
           logger.debug(`GHCR packages POC stopped at page ${page}`);
           return [...tags];
