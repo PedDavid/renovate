@@ -50,6 +50,7 @@ import {
 import { DockerHubCache } from './dockerhub-cache.ts';
 import { ecrPublicRegex, ecrRegex, isECRMaxResultsError } from './ecr.ts';
 import { getImmichPackageTags } from './ghcr-packages.ts';
+import { getImmichReleaseTags } from './ghcr-releases.ts';
 import type {
   DistributionManifest,
   Manifest,
@@ -1304,6 +1305,35 @@ export class DockerDatasource extends Datasource {
 
     let tagsResult: TagsResultType;
     if (
+      getEnv().RENOVATE_X_GHCR_IMMICH_RELEASES === 'true' &&
+      registryHost === 'https://ghcr.io' &&
+      (dockerRepository === 'immich-app/immich-server' ||
+        dockerRepository === 'immich-app/immich-machine-learning')
+    ) {
+      const releaseTags = await getImmichReleaseTags(
+        dockerRepository,
+        currentValue ?? '',
+      );
+      if (releaseTags) {
+        tagsResult = Result.wrapNullable(
+          Promise.resolve(releaseTags),
+          'tags-error' as const,
+        ).transform((tags) => tags.map((version) => ({ version })));
+      } else if (getEnv().RENOVATE_X_GHCR_IMMICH_PACKAGES === 'true') {
+        const packageTags = await getImmichPackageTags(
+          dockerRepository,
+          currentValue ?? '',
+        );
+        tagsResult = packageTags
+          ? Result.wrapNullable(
+              Promise.resolve(packageTags),
+              'tags-error' as const,
+            ).transform((tags) => tags.map((version) => ({ version })))
+          : getTags();
+      } else {
+        tagsResult = getTags();
+      }
+    } else if (
       getEnv().RENOVATE_X_GHCR_IMMICH_PACKAGES === 'true' &&
       registryHost === 'https://ghcr.io' &&
       (dockerRepository === 'immich-app/immich-server' ||

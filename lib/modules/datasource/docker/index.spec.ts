@@ -173,10 +173,108 @@ describe('modules/datasource/docker/index', () => {
       password: 'some-password',
     });
     vi.stubEnv('RENOVATE_X_GHCR_IMMICH_PACKAGES', undefined);
+    vi.stubEnv('RENOVATE_X_GHCR_IMMICH_RELEASES', undefined);
     vi.stubEnv('RENOVATE_X_DOCKER_HUB_TAGS_DISABLE', undefined);
     vi.stubEnv('RENOVATE_X_DOCKER_HUB_DISABLE_LABEL_LOOKUP', undefined);
     vi.stubEnv('RENOVATE_X_DOCKER_PAGINATION_ALLOW_CROSS_ORIGIN', undefined);
     vi.stubEnv('RENOVATE_X_NUGET_PAGINATION_ALLOW_CROSS_ORIGIN', undefined);
+  });
+
+  describe('experimental Immich GHCR releases lookup', () => {
+    const ds = new DockerDatasource();
+    const config = {
+      packageName: 'ghcr.io/immich-app/immich-server',
+      registryUrl: 'https://ghcr.io',
+      currentValue: 'v3.1.0',
+    };
+
+    beforeEach(() => {
+      vi.spyOn(ds, 'getLabels').mockResolvedValue({});
+    });
+
+    it('takes precedence over Packages API and leaves digest lookups on GHCR', async () => {
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_RELEASES', 'true');
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_PACKAGES', 'true');
+      const registry = vi.spyOn(ds, 'getTags');
+      httpMock
+        .scope('https://api.github.com')
+        .get('/repos/immich-app/immich/releases?per_page=100&page=1')
+        .reply(200, [{ tag_name: 'v3.2.0', draft: false, prerelease: false }]);
+      httpMock
+        .scope('https://ghcr.io/v2')
+        .get('/')
+        .reply(200, {})
+        .head('/immich-app/immich-server/manifests/v3.2.0')
+        .reply(200)
+        .head('/immich-app/immich-server/manifests/release')
+        .reply(404)
+        .head('/immich-app/immich-server/manifests/latest')
+        .reply(404);
+
+      const result = await ds.getReleases(config);
+      httpMock
+        .scope('https://ghcr.io/v2')
+        .get('/')
+        .reply(200, {})
+        .head('/immich-app/immich-server/manifests/v3.2.0')
+        .reply(200, undefined, {
+          'docker-content-digest': `sha256:${'a'.repeat(64)}`,
+        });
+      const digest = await ds.getDigest(
+        {
+          packageName: config.packageName,
+          registryUrl: result!.registryUrl,
+          lookupName: result!.lookupName,
+        },
+        'v3.2.0',
+      );
+
+      expect(result?.releases).toEqual([
+        { version: 'v3.1.0' },
+        { version: 'v3.2.0' },
+      ]);
+      expect(digest).toBe(`sha256:${'a'.repeat(64)}`);
+      expect(registry).not.toHaveBeenCalled();
+    });
+
+    it('falls through to Packages API on a release API error when both flags are enabled', async () => {
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_RELEASES', 'true');
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_PACKAGES', 'true');
+      vi.spyOn(ds, 'getTags').mockResolvedValue(['registry']);
+      httpMock
+        .scope('https://api.github.com')
+        .get('/repos/immich-app/immich/releases?per_page=100&page=1')
+        .reply(403)
+        .get(
+          '/orgs/immich-app/packages/container/immich-server/versions?per_page=100&page=1',
+        )
+        .reply(200, [
+          { metadata: { container: { tags: ['v3.1.0', 'v3.2.0'] } } },
+        ])
+        .get('/repos/immich-app/immich/releases/latest')
+        .reply(200, { tag_name: 'v3.2.0' });
+
+      const result = await ds.getReleases(config);
+
+      expect(result?.releases).toEqual([
+        { version: 'v3.1.0' },
+        { version: 'v3.2.0' },
+      ]);
+    });
+
+    it('falls back to registry when Packages API is disabled', async () => {
+      vi.stubEnv('RENOVATE_X_GHCR_IMMICH_RELEASES', 'true');
+      const registry = vi.spyOn(ds, 'getTags').mockResolvedValue(['v3.2.0']);
+      httpMock
+        .scope('https://api.github.com')
+        .get('/repos/immich-app/immich/releases?per_page=100&page=1')
+        .reply(503);
+
+      const result = await ds.getReleases(config);
+
+      expect(result?.releases).toEqual([{ version: 'v3.2.0' }]);
+      expect(registry).toHaveBeenCalledOnce();
+    });
   });
 
   describe('experimental Immich GHCR packages lookup', () => {
