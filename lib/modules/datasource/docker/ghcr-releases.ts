@@ -116,7 +116,7 @@ export async function getImmichReleaseTags(
         );
         tags.add(alias);
       } catch (err) {
-        if (!(err instanceof HttpError) || err.statusCode !== 404) {
+        if (!(err instanceof HttpError) || err.response?.statusCode !== 404) {
           outcome = 'alias_probe_error';
           return null;
         }
