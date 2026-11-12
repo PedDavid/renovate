@@ -10,6 +10,7 @@ const packageVersions = z.array(packageVersion);
 const latestRelease = z.object({ tag_name: z.string() });
 const http = new Http('github');
 const api = 'https://api.github.com';
+const maxPackagePages = 50;
 
 /** Experimental, bounded newest-first lookup for the two Immich GHCR packages. */
 export async function getImmichPackageTags(
@@ -63,7 +64,7 @@ export async function getImmichPackageTags(
   try {
     // This is an observed order, NOT a documented API contract. Bound the
     // experiment; if we cannot establish a stopping point, use registry v2.
-    for (let page = 1; page <= 10; page += 1) {
+    for (let page = 1; page <= maxPackagePages; page += 1) {
       const url = `${api}/orgs/immich-app/packages/container/${repository.split('/')[1]}/versions?per_page=100&page=${page}`;
       const response = await http.getJson(
         url,
