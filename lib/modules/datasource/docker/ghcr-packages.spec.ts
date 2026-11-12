@@ -124,8 +124,30 @@ describe('modules/datasource/docker/ghcr-packages', () => {
     );
   });
 
-  it('bounds pagination at ten pages before falling back', async () => {
-    for (let pageNumber = 1; pageNumber <= 10; pageNumber += 1) {
+  it('finds the current tag beyond the old ten-page bound', async () => {
+    for (let pageNumber = 1; pageNumber < 25; pageNumber += 1) {
+      page(pageNumber, [...filler, filler[0]]);
+    }
+    page(25, [{ metadata: { container: { tags: ['v3.3.6', 'v3.4.0'] } } }]);
+    release('v3.4.0');
+
+    await expect(
+      getImmichPackageTags('immich-app/immich-server', 'v3.3.6'),
+    ).resolves.toContain('v3.4.0');
+    expect(logger.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'packages_api',
+        outcome: 'used_api',
+        pagesFetched: 25,
+        currentTagFound: true,
+        latestReleaseFound: true,
+      }),
+      'Immich GHCR Packages lookup decision',
+    );
+  });
+
+  it('bounds pagination at fifty pages before falling back', async () => {
+    for (let pageNumber = 1; pageNumber <= 50; pageNumber += 1) {
       page(pageNumber, [
         ...filler,
         { metadata: { container: { tags: [`commit-${pageNumber}`] } } },
@@ -139,7 +161,9 @@ describe('modules/datasource/docker/ghcr-packages', () => {
       expect.objectContaining({
         source: 'registry_fallback',
         outcome: 'page_limit',
-        pagesFetched: 10,
+        pagesFetched: 50,
+        currentTagFound: false,
+        latestReleaseChecked: false,
       }),
       'Immich GHCR Packages lookup decision',
     );
