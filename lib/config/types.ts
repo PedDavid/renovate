@@ -64,8 +64,17 @@ export type BinarySource = 'docker' | 'global' | 'install' | 'hermit';
  * @see RenovateConfig for the superset of all configuration allowed in a given repository
  *
  */
+export interface DockerReleaseDiscoveryConfig {
+  source: 'github-releases';
+  repository: string;
+  coverage: 'published-releases-only';
+  fallbackOnError: 'registry';
+  movingTags?: string[];
+}
+
 export interface RenovateSharedConfig {
   $schema?: string;
+  dockerTagDiscovery?: DockerReleaseDiscoveryConfig | null;
   abandonmentThreshold?: Nullish<string>;
   addLabels?: string[];
   assignAutomerge?: boolean;
@@ -818,6 +827,7 @@ export interface RenovateObjectOption extends RenovateOptionBase {
    * The keys the object accepts, for an option whose keys are a known set rather than the user's choice.
    */
   properties?: Record<string, unknown>;
+  required?: string[];
   mergeable?: boolean;
   type: 'object';
 }

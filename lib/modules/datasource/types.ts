@@ -1,6 +1,7 @@
 import type {
   ConstraintsFilter,
   CustomDatasourceConfig,
+  DockerReleaseDiscoveryConfig,
 } from '../../config/types.ts';
 import type { DatasourceName } from '../../datasource-list.generated.ts';
 import type { ModuleApi } from '../../types/index.ts';
@@ -45,6 +46,7 @@ export interface GetDigestInputConfig extends DigestConfig, RegistryUrlsConfig {
  * registry.
  */
 export interface GetReleasesConfig {
+  dockerTagDiscovery?: DockerReleaseDiscoveryConfig | null;
   customDatasources?: Record<string, CustomDatasourceConfig>;
   datasource?: string;
   packageName: string;

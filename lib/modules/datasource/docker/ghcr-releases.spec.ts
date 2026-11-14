@@ -1,6 +1,6 @@
 import * as httpMock from '~test/http-mock.ts';
 import { logger } from '~test/util.ts';
-import { getImmichReleaseTags } from './ghcr-releases.ts';
+import { getGithubReleaseTags, getImmichReleaseTags } from './ghcr-releases.ts';
 
 const repository = 'immich-app/immich-server';
 const github = 'https://api.github.com';
@@ -229,5 +229,92 @@ describe('modules/datasource/docker/ghcr-releases', () => {
       expect.objectContaining({ outcome: 'alias_probe_error' }),
       'Immich GHCR Releases lookup decision',
     );
+  });
+
+  describe('configured release discovery', () => {
+    const config = {
+      source: 'github-releases' as const,
+      repository: 'acme/product',
+      coverage: 'published-releases-only' as const,
+      fallbackOnError: 'registry' as const,
+    };
+
+    it('maps an unrelated image to its configured release repository without probing aliases', async () => {
+      httpMock
+        .scope(github)
+        .get('/repos/acme/product/releases?per_page=100&page=1')
+        .reply(200, [release('v1.2.0')]);
+      httpMock
+        .scope(ghcr)
+        .get('/')
+        .reply(200, {})
+        .head('/acme/widget/manifests/v1.2.0')
+        .reply(200);
+
+      const tags = await getGithubReleaseTags('acme/widget', 'v1.1.0', config);
+
+      expect(tags).toEqual(['v1.1.0', 'v1.2.0']);
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: 'releases_api',
+          releaseRepository: 'acme/product',
+          dockerRepository: 'acme/widget',
+          candidatesChecked: 1,
+        }),
+        'Docker GitHub Releases lookup decision',
+      );
+    });
+
+    it('checks only configured moving tags and preserves missing aliases', async () => {
+      httpMock
+        .scope(github)
+        .get('/repos/acme/product/releases?per_page=100&page=1')
+        .reply(200, []);
+      httpMock
+        .scope(ghcr)
+        .get('/')
+        .reply(200, {})
+        .head('/acme/widget/manifests/stable')
+        .reply(404)
+        .head('/acme/widget/manifests/edge')
+        .reply(200);
+
+      const tags = await getGithubReleaseTags('acme/widget', 'v1.1.0', {
+        ...config,
+        movingTags: ['stable', 'edge'],
+      });
+
+      expect(tags).toEqual(['v1.1.0', 'edge']);
+    });
+
+    it('rejects malformed repository paths instead of making a request', async () => {
+      await expect(
+        getGithubReleaseTags('acme/widget', 'v1.1.0', {
+          ...config,
+          repository: '../another-repo',
+        }),
+      ).rejects.toThrow('Invalid input');
+    });
+
+    it('falls back visibly on an API error without logging raw HTTP details', async () => {
+      httpMock
+        .scope(github)
+        .get('/repos/acme/product/releases?per_page=100&page=1')
+        .reply(403, { secret: 'do-not-log' });
+
+      await expect(
+        getGithubReleaseTags('acme/widget', 'v1.1.0', config),
+      ).resolves.toBeNull();
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: 'registry_fallback',
+          outcome: 'api_or_registry_error',
+        }),
+        'Docker GitHub Releases lookup decision',
+      );
+      expect(JSON.stringify(logger.logger.info.mock.calls)).not.toContain(
+        'do-not-log',
+      );
+    });
   });
 });

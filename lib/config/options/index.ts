@@ -2005,6 +2005,38 @@ const options: Readonly<RenovateOptions>[] = [
     supportsTemplating: true,
   },
   {
+    name: 'dockerTagDiscovery',
+    scopes: lookupScopes,
+    description:
+      'Opt in to published GitHub releases as candidate Docker tags for a GHCR image. A healthy response does not discover unpublished image tags.',
+    type: 'object',
+    freeChoice: true,
+    default: null,
+    cli: false,
+    env: false,
+    mergeable: false,
+    properties: {
+      source: { type: 'string', const: 'github-releases' },
+      repository: {
+        type: 'string',
+        pattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$',
+      },
+      coverage: { type: 'string', const: 'published-releases-only' },
+      fallbackOnError: { type: 'string', const: 'registry' },
+      movingTags: {
+        type: 'array',
+        items: {
+          type: 'string',
+          pattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$',
+        },
+        maxItems: 4,
+        uniqueItems: true,
+      },
+    },
+    required: ['source', 'repository', 'coverage', 'fallbackOnError'],
+    additionalProperties: false,
+  },
+  {
     name: 'pinDigests',
     scopes: lookupScopes,
     description: 'Whether to add digests to Dockerfile source images.',

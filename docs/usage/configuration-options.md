@@ -1643,6 +1643,10 @@ Presets which consist only of other presets have their own description omitted f
 
 Add to this object if you wish to define rules that apply only to PRs that update digests.
 
+## `dockerTagDiscovery`
+
+Opt in to using published GitHub releases as candidate tags for a GHCR Docker image. Set this in a package rule with `source: "github-releases"`, the explicit `repository` (owner/name), `coverage: "published-releases-only"`, and `fallbackOnError: "registry"`. Optional `movingTags` are checked separately on GHCR. This is a **release-only** view, not a complete registry tag list; a healthy response can miss unpublished container tags. See [the experimental configuration and limitations](../development/docker-github-release-discovery.md).
+
 ## `draftPR`
 
 If you want the PRs created by Renovate to be considered as drafts rather than normal PRs, you could add this property to your `renovate.json`:

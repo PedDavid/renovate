@@ -180,6 +180,9 @@ function createSingleConfig(
     /* the option's metadata is frozen, so we need our own copy to be able to declare any children on it */
     temp.properties = { ...option.properties };
   }
+  if (hasKey('required', option) && Array.isArray(option.required)) {
+    temp.required = [...option.required];
+  }
   if (option.default === null || option.nullable) {
     temp.type = [option.type, 'null'];
   }
