@@ -4146,6 +4146,131 @@ describe('modules/datasource/docker/index', () => {
       );
     }, 15000);
 
+    it('recovers a MariaDB first-page 429 on the same tags/list URL', async () => {
+      const tagsUrl = '/linuxserver/mariadb/tags/list?n=10000';
+      httpMock
+        .scope('https://lscr.io/v2')
+        .get(tagsUrl)
+        .reply(200, '', {}) // Auth probe
+        .get(tagsUrl)
+        .reply(429, { errors: [{ code: 'TOOMANYREQUESTS' }] })
+        .get(tagsUrl)
+        .reply(200, { tags: ['10.11.8'] });
+
+      const ds = new DockerDatasource();
+      await expect(
+        ds.getTags('https://lscr.io', 'linuxserver/mariadb'),
+      ).resolves.toEqual(['10.11.8']);
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        {
+          registryHost: 'https://lscr.io',
+          dockerRepository: 'linuxserver/mariadb',
+          retries: 1,
+          outcome: 'recovered',
+        },
+        'Docker registry tags pagination rate limit',
+      );
+    });
+
+    it('retries only the failed MariaDB pagination cursor', async () => {
+      const tagsUrl = '/linuxserver/mariadb/tags/list?n=10000';
+      const nextUrl = `${tagsUrl}&last=amd64-version-10.11.8-r0`;
+      httpMock
+        .scope('https://lscr.io/v2')
+        .get(tagsUrl)
+        .reply(200, '', {}) // Auth probe
+        .get(tagsUrl)
+        .reply(
+          200,
+          { tags: ['amd64-version-10.11.8-r0'] },
+          {
+            link: `<https://lscr.io/v2${nextUrl}>; rel="next"`,
+          },
+        )
+        .get(nextUrl)
+        .reply(429, { errors: [{ code: 'TOOMANYREQUESTS' }] })
+        .get(nextUrl)
+        .reply(200, { tags: ['amd64-version-10.11.9-r0'] });
+
+      const ds = new DockerDatasource();
+      await expect(
+        ds.getTags('https://lscr.io', 'linuxserver/mariadb'),
+      ).resolves.toEqual([
+        'amd64-version-10.11.8-r0',
+        'amd64-version-10.11.9-r0',
+      ]);
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        {
+          registryHost: 'https://lscr.io',
+          dockerRepository: 'linuxserver/mariadb',
+          retries: 1,
+          outcome: 'recovered',
+        },
+        'Docker registry tags pagination rate limit',
+      );
+    });
+
+    it('reports exhausted MariaDB 429s without restarting the tag walk', async () => {
+      const tagsUrl = '/linuxserver/mariadb/tags/list?n=10000';
+      httpMock
+        .scope('https://lscr.io/v2')
+        .get(tagsUrl)
+        .reply(200, '', {}) // Auth probe
+        .get(tagsUrl)
+        .times(3)
+        .reply(429, { errors: [{ code: 'TOOMANYREQUESTS' }] });
+
+      const ds = new DockerDatasource();
+      await expect(
+        ds.getTags('https://lscr.io', 'linuxserver/mariadb'),
+      ).rejects.toMatchObject({ statusCode: 429 });
+      expect(logger.logger.info).toHaveBeenCalledWith(
+        {
+          registryHost: 'https://lscr.io',
+          dockerRepository: 'linuxserver/mariadb',
+          retries: 2,
+          outcome: 'exhausted',
+        },
+        'Docker registry tags pagination rate limit',
+      );
+    });
+
+    it('does not retry 429 tag pages for other lscr.io images', async () => {
+      httpMock
+        .scope('https://lscr.io/v2')
+        .get('/linuxserver/redis/tags/list?n=10000')
+        .reply(200, '', {}) // Auth probe
+        .get('/linuxserver/redis/tags/list?n=10000')
+        .reply(429, { errors: [{ code: 'TOOMANYREQUESTS' }] });
+
+      const ds = new DockerDatasource();
+      await expect(
+        ds.getTags('https://lscr.io', 'linuxserver/redis'),
+      ).rejects.toMatchObject({ statusCode: 429 });
+      expect(logger.logger.info).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Docker registry tags pagination rate limit',
+      );
+    });
+
+    it('does not retry non-429 MariaDB tag-page errors', async () => {
+      httpMock
+        .scope('https://lscr.io/v2')
+        .get('/linuxserver/mariadb/tags/list?n=10000')
+        .reply(200, '', {}) // Auth probe
+        .get('/linuxserver/mariadb/tags/list?n=10000')
+        .reply(403);
+
+      const ds = new DockerDatasource();
+      await expect(
+        ds.getTags('https://lscr.io', 'linuxserver/mariadb'),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(logger.logger.info).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Docker registry tags pagination rate limit',
+      );
+    });
+
     it('does not retry 429 pagination for other GHCR packages', async () => {
       const scope = httpMock.scope('https://ghcr.io/v2');
       const tagsUrl = '/example/image/tags/list?n=10000';
