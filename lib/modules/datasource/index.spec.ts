@@ -435,6 +435,59 @@ describe('modules/datasource/index', () => {
       );
     });
 
+    it('passes an opt-in Docker discovery policy through the datasource seam', async () => {
+      const ds = new DummyDatasource();
+      const lookup = vi.spyOn(ds, 'getReleases');
+      datasources.set(datasource, ds);
+      const dockerTagDiscovery = {
+        source: 'github-releases' as const,
+        repository: 'acme/product',
+        coverage: 'published-releases-only' as const,
+        fallbackOnError: 'registry' as const,
+      };
+
+      await getPkgReleases({ datasource, packageName, dockerTagDiscovery });
+
+      expect(lookup).toHaveBeenCalledWith(
+        expect.objectContaining({ dockerTagDiscovery }),
+      );
+    });
+
+    it('separates cached Docker results by discovery policy', async () => {
+      const original = datasources.get('docker')!;
+      datasources.set('docker', new DummyDatasource());
+      GlobalConfig.set({ cachePrivatePackages: true });
+      packageCache.get.mockClear();
+      const config = {
+        datasource: 'docker',
+        packageName,
+        registryUrls: ['https://reg1.com'],
+        dockerTagDiscovery: {
+          source: 'github-releases' as const,
+          repository: 'acme/product',
+          coverage: 'published-releases-only' as const,
+          fallbackOnError: 'registry' as const,
+        },
+      };
+
+      try {
+        await getPkgReleases(config);
+        await getPkgReleases({
+          ...config,
+          dockerTagDiscovery: {
+            ...config.dockerTagDiscovery,
+            repository: 'other/project',
+          },
+        });
+
+        const keys = packageCache.get.mock.calls.map(([, key]) => key);
+        expect(keys).toHaveLength(2);
+        expect(keys[0]).not.toBe(keys[1]);
+      } finally {
+        datasources.set('docker', original);
+      }
+    });
+
     it('supports defaultRegistryUrls parameter', async () => {
       const registries: RegistriesMock = {
         'https://foo.bar': { releases: [{ version: '0.0.1' }] },

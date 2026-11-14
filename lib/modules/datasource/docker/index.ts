@@ -50,7 +50,7 @@ import {
 import { DockerHubCache } from './dockerhub-cache.ts';
 import { ecrPublicRegex, ecrRegex, isECRMaxResultsError } from './ecr.ts';
 import { getImmichPackageTags } from './ghcr-packages.ts';
-import { getImmichReleaseTags } from './ghcr-releases.ts';
+import { getGithubReleaseTags, getImmichReleaseTags } from './ghcr-releases.ts';
 import type {
   DistributionManifest,
   Manifest,
@@ -1280,6 +1280,7 @@ export class DockerDatasource extends Datasource {
     packageName,
     registryUrl,
     currentValue,
+    dockerTagDiscovery,
   }: GetReleasesConfig): Promise<ReleaseResult | null> {
     const { registryHost, dockerRepository } = getRegistryRepository(
       packageName,
@@ -1304,7 +1305,22 @@ export class DockerDatasource extends Datasource {
       ).catch(getTags);
 
     let tagsResult: TagsResultType;
-    if (
+    if (dockerTagDiscovery) {
+      if (registryHost !== 'https://ghcr.io') {
+        throw new Error('dockerTagDiscovery currently supports only ghcr.io');
+      }
+      const releaseTags = await getGithubReleaseTags(
+        dockerRepository,
+        currentValue ?? '',
+        dockerTagDiscovery,
+      );
+      tagsResult = releaseTags
+        ? Result.wrapNullable(
+            Promise.resolve(releaseTags),
+            'tags-error' as const,
+          ).transform((tags) => tags.map((version) => ({ version })))
+        : getTags();
+    } else if (
       getEnv().RENOVATE_X_GHCR_IMMICH_RELEASES === 'true' &&
       registryHost === 'https://ghcr.io' &&
       (dockerRepository === 'immich-app/immich-server' ||
@@ -1413,7 +1429,13 @@ export class DockerDatasource extends Datasource {
     return withCache(
       {
         namespace: 'datasource-docker-releases-v2',
-        key: buildCacheKey(registryHost, dockerRepository),
+        key: config.dockerTagDiscovery
+          ? buildCacheKey(
+              registryHost,
+              dockerRepository,
+              JSON.stringify(config.dockerTagDiscovery),
+            )
+          : buildCacheKey(registryHost, dockerRepository),
         cacheable: registryHost === DOCKER_HUB,
         fallback: true,
       },

@@ -180,6 +180,87 @@ describe('modules/datasource/docker/index', () => {
     vi.stubEnv('RENOVATE_X_NUGET_PAGINATION_ALLOW_CROSS_ORIGIN', undefined);
   });
 
+  describe('configured GitHub release discovery', () => {
+    const ds = new DockerDatasource();
+    const config = {
+      packageName: 'ghcr.io/acme/widget',
+      registryUrl: 'https://ghcr.io',
+      currentValue: 'v1.1.0',
+      dockerTagDiscovery: {
+        source: 'github-releases' as const,
+        repository: 'acme/product',
+        coverage: 'published-releases-only' as const,
+        fallbackOnError: 'registry' as const,
+      },
+    };
+
+    beforeEach(() => {
+      vi.spyOn(ds, 'getLabels').mockResolvedValue({});
+    });
+
+    it('uses configured releases for a non-Immich image and preserves GHCR digest lookup', async () => {
+      const registry = vi.spyOn(ds, 'getTags');
+      httpMock
+        .scope('https://api.github.com')
+        .get('/repos/acme/product/releases?per_page=100&page=1')
+        .reply(200, [{ tag_name: 'v1.2.0', draft: false, prerelease: false }]);
+      httpMock
+        .scope('https://ghcr.io/v2')
+        .get('/')
+        .reply(200, {})
+        .head('/acme/widget/manifests/v1.2.0')
+        .reply(200);
+
+      const result = await ds.getReleases(config);
+      httpMock
+        .scope('https://ghcr.io/v2')
+        .get('/')
+        .reply(200, {})
+        .head('/acme/widget/manifests/v1.2.0')
+        .reply(200, undefined, {
+          'docker-content-digest': `sha256:${'a'.repeat(64)}`,
+        });
+      const digest = await ds.getDigest(
+        {
+          packageName: config.packageName,
+          registryUrl: result!.registryUrl,
+          lookupName: result!.lookupName,
+        },
+        'v1.2.0',
+      );
+
+      expect(result?.releases).toEqual([
+        { version: 'v1.1.0' },
+        { version: 'v1.2.0' },
+      ]);
+      expect(registry).not.toHaveBeenCalled();
+      expect(digest).toBe(`sha256:${'a'.repeat(64)}`);
+    });
+
+    it('falls back directly to registry on an API failure', async () => {
+      const registry = vi.spyOn(ds, 'getTags').mockResolvedValue(['v1.2.0']);
+      httpMock
+        .scope('https://api.github.com')
+        .get('/repos/acme/product/releases?per_page=100&page=1')
+        .reply(503);
+
+      const result = await ds.getReleases(config);
+
+      expect(result?.releases).toEqual([{ version: 'v1.2.0' }]);
+      expect(registry).toHaveBeenCalledOnce();
+    });
+
+    it('does not silently apply the policy to another registry', async () => {
+      await expect(
+        ds.getReleases({
+          ...config,
+          packageName: 'registry.example.com/acme/widget',
+          registryUrl: 'https://registry.example.com',
+        }),
+      ).rejects.toThrow('dockerTagDiscovery currently supports only ghcr.io');
+    });
+  });
+
   describe('experimental Immich GHCR releases lookup', () => {
     const ds = new DockerDatasource();
     const config = {

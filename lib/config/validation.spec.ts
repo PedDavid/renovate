@@ -77,6 +77,31 @@ describe('config/validation', () => {
       expect(warnings).toBeEmptyArray();
     });
 
+    it('accepts release-only Docker discovery in a package rule', async () => {
+      const config: RenovateConfig = {
+        packageRules: [
+          {
+            matchDatasources: ['docker'],
+            matchPackageNames: ['ghcr.io/acme/widget'],
+            dockerTagDiscovery: {
+              source: 'github-releases',
+              repository: 'acme/product',
+              coverage: 'published-releases-only',
+              fallbackOnError: 'registry',
+            },
+          },
+        ],
+      };
+
+      const { errors, warnings } = await configValidation.validateConfig(
+        'repo',
+        config,
+      );
+
+      expect(errors).toBeEmptyArray();
+      expect(warnings).toBeEmptyArray();
+    });
+
     it('catches global options in repo config', async () => {
       const config = {
         binarySource: 'something',

@@ -1,6 +1,9 @@
 import { z } from 'zod/v4';
+import type { DockerReleaseDiscoveryConfig } from '../../../config/types.ts';
 import { logger } from '../../../logger/index.ts';
+import { coerceArray } from '../../../util/array.ts';
 import { Http, HttpError } from '../../../util/http/index.ts';
+import { regEx } from '../../../util/regex.ts';
 import { api as dockerVersioning } from '../../versioning/docker/index.ts';
 import { getAuthHeaders } from './common.ts';
 
@@ -16,12 +19,32 @@ const releases = z.array(
 const api = 'https://api.github.com';
 const maxPages = 20;
 const maxCandidates = 100;
+const discoveryConfig = z.strictObject({
+  source: z.literal('github-releases'),
+  repository: z
+    .string()
+    .regex(regEx(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/))
+    .refine((repo) =>
+      repo.split('/').every((segment) => segment !== '.' && segment !== '..'),
+    ),
+  coverage: z.literal('published-releases-only'),
+  fallbackOnError: z.literal('registry'),
+  movingTags: z
+    .array(z.string().regex(regEx(/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/)))
+    .max(4)
+    .refine((tags) => new Set(tags).size === tags.length)
+    .optional(),
+});
 
 /** Enumerate published releases, verifying all newer image tags before using them. */
-export async function getImmichReleaseTags(
+export async function getGithubReleaseTags(
   repository: string,
   currentValue: string,
+  config: DockerReleaseDiscoveryConfig,
+  logEvent = 'Docker GitHub Releases lookup decision',
 ): Promise<string[] | null> {
+  // Never let a configuration value change the GitHub API origin or inject a URL path.
+  const discovery = discoveryConfig.parse(config);
   const tags = new Set<string>([currentValue]);
   let pagesFetched = 0;
   let candidatesChecked = 0;
@@ -36,7 +59,7 @@ export async function getImmichReleaseTags(
     let exhausted = false;
     for (let page = 1; page <= maxPages; page += 1) {
       const response = await github.getJson(
-        `${api}/repos/immich-app/immich/releases?per_page=100&page=${page}`,
+        `${api}/repos/${discovery.repository}/releases?per_page=100&page=${page}`,
         {},
         releases,
       );
@@ -103,9 +126,9 @@ export async function getImmichReleaseTags(
       }
       tags.add(tag);
     }
-    // Preserve the two moving Immich aliases when published. Other arbitrary
+    // Only explicitly configured moving aliases are checked. Arbitrary
     // non-release tags cannot be discovered from the releases endpoint.
-    for (const alias of ['release', 'latest']) {
+    for (const alias of coerceArray(discovery.movingTags)) {
       try {
         await registry.head(
           `https://ghcr.io/v2/${repository}/manifests/${alias}`,
@@ -131,13 +154,34 @@ export async function getImmichReleaseTags(
     logger.info(
       {
         dockerRepository: repository,
+        releaseRepository: discovery.repository,
+        coverage: discovery.coverage,
         source: outcome === 'used_api' ? 'releases_api' : 'registry_fallback',
         outcome,
         pagesFetched,
         candidatesChecked,
         tagsFound: tags.size,
       },
-      'Immich GHCR Releases lookup decision',
+      logEvent,
     );
   }
+}
+
+/** Keep the existing Immich trial and its log event unchanged. */
+export async function getImmichReleaseTags(
+  repository: string,
+  currentValue: string,
+): Promise<string[] | null> {
+  return getGithubReleaseTags(
+    repository,
+    currentValue,
+    {
+      source: 'github-releases',
+      repository: 'immich-app/immich',
+      coverage: 'published-releases-only',
+      fallbackOnError: 'registry',
+      movingTags: ['release', 'latest'],
+    },
+    'Immich GHCR Releases lookup decision',
+  );
 }

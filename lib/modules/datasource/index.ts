@@ -65,6 +65,7 @@ function toGetReleasesConfig(
 ): GetReleasesConfig {
   const {
     customDatasources,
+    dockerTagDiscovery,
     datasource,
     packageName,
     currentValue,
@@ -74,6 +75,7 @@ function toGetReleasesConfig(
   } = config;
   return {
     customDatasources,
+    dockerTagDiscovery,
     datasource,
     packageName,
     registryUrl,
@@ -107,7 +109,14 @@ async function getRegistryReleases(
   registryUrl: string,
 ): Promise<ReleaseResult | null> {
   const cacheNamespace: PackageCacheNamespace = `datasource-releases-${datasource.id}`;
-  const cacheKey = buildCacheKey(registryUrl, config.packageName);
+  const cacheKey =
+    config.datasource === 'docker' && config.dockerTagDiscovery
+      ? buildCacheKey(
+          registryUrl,
+          config.packageName,
+          JSON.stringify(config.dockerTagDiscovery),
+        )
+      : buildCacheKey(registryUrl, config.packageName);
 
   const cacheEnabled = !!datasource.caching; // tells if `isPrivate` flag is supported in datasource result
   const cacheForced = GlobalConfig.get('cachePrivatePackages'); // tells if caching is forced via admin config
