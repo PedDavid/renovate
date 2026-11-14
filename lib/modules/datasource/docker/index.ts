@@ -780,10 +780,12 @@ export class DockerDatasource extends Datasource {
     logger.trace({ registryHost, dockerRepository, pages }, 'docker.getTags');
     const allowCrossOrigin = isCrossOriginPaginationAllowed(dockerDatasourceId);
     let foundMaxResultsError = false;
-    const retryGhcrPagination =
-      registryHost === 'https://ghcr.io' &&
-      (dockerRepository === 'immich-app/immich-server' ||
-        dockerRepository === 'immich-app/immich-machine-learning');
+    const retryScopedPagination =
+      (registryHost === 'https://ghcr.io' &&
+        (dockerRepository === 'immich-app/immich-server' ||
+          dockerRepository === 'immich-app/immich-machine-learning')) ||
+      (registryHost === 'https://lscr.io' &&
+        dockerRepository === 'linuxserver/mariadb');
     // Bound added retries across the entire walk, not just per page. An image
     // can have hundreds of pages; a persistently limited host must not stall
     // the whole Renovate job.
@@ -791,7 +793,7 @@ export class DockerDatasource extends Datasource {
     do {
       let res: HttpResponse<RegistryTagsList> | undefined;
       // Retry the same cursor after got's own retries are exhausted. Never
-      // restart the full walk: GHCR has hundreds of pages for these images.
+      // restart the full walk: large registries may have hundreds of pages.
       for (let retries = 0; ; retries += 1) {
         try {
           res = await this.http.getJson(
@@ -819,7 +821,7 @@ export class DockerDatasource extends Datasource {
             break;
           }
           if (
-            !retryGhcrPagination ||
+            !retryScopedPagination ||
             !(err instanceof HttpError) ||
             err.response?.statusCode !== 429
           ) {
